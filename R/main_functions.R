@@ -13,7 +13,6 @@
 #' the second column is the 1/0 (failure observed/censored) and remaining columns are covariates.
 #' @export
 sim_observations <- function(n, beta, censor=1, C_z=1){
-  # censoring distribution is Exp(censor)
   d <- length(beta)
   predictors <- matrix(runif(n*d, min=-C_z/sqrt(d), max=C_z/sqrt(d)),
                        nrow=n, ncol=d)
@@ -75,20 +74,6 @@ cdp_cox <- function(obs, epsilon, delta=0.001, niters=NA, C_beta = 1, C_z = 1,
   return(beta)
 }
 
-grad_sensitivity <- function(n, C_beta=1, C_z=1){
-  return(4*C_z/n + exp(2*C_z*C_beta)*(2*C_z + C_z^2)*log(n+1)/n)
-}
-
-label_grad_sensitivity <- function(covariates, beta){
-  n <- dim(covariates)[1]
-  max_norm <- max(sqrt(rowSums(covariates^2)))
-  max_norm_exp <- max(apply(covariates, 1, function(x) sqrt(sum(x^2))*exp(sum(x*beta))))
-  exp_negative <- max(apply(covariates, 1, function (x) -sum(x*beta)))
-  exp_positive <- max(apply(covariates, 1, function (x) sum(x*beta)))
-  return(3*max_norm/n + log(n+1)*max_norm*exp(exp_negative)*exp(exp_positive)/n + 
-           log(n+1)*max_norm_exp*exp(exp_negative)/n)
-}
-
 
 #' FDP marginal survival estimation
 #'
@@ -118,7 +103,7 @@ fdp_probabilities <- function(times, epsilon, delta=rep(0.001, S), cutoff=1){
 #'
 #' A distributed variant of the Breslow estimator satisfying federated differential privacy.
 #'
-#' @param datasets List of S datasets, with (2+d) columns, as generated from sim_observations().
+#' @param obs List of S datasets, with (2+d) columns, as generated from sim_observations().
 #' @param epsilon Positive numeric vector of length S. Epsilon privacy budget in terms of DP.
 #' @param beta_hat Numeric vector of length d. Estimate of the Cox regression coefficients
 #' @param p_hat Positive numeric. Estimate of P(Y(cutoff)=1).
@@ -132,12 +117,12 @@ fdp_probabilities <- function(times, epsilon, delta=rep(0.001, S), cutoff=1){
 #' @return list containing two positive numeric vectors, 'times' and 'vals'.
 #' vals[t] is the estimate for the cumulative hazard at times[t].
 #' @export
-fdp_breslow <- function(datasets, epsilon, beta_hat, p_hat, delta=rep(0.001, S), 
+fdp_breslow <- function(obs, epsilon, beta_hat, p_hat, delta=rep(0.001, S), 
                         cutoff=1, C_z=1, weights=NA, tree_height=NA, truncation=NA){
-  S <- length(datasets)
+  S <- length(obs)
   nsamples <- rep(0, S)
   for (s in 1:S){
-    nsamples[s] <- dim(datasets[[s]])[1]
+    nsamples[s] <- dim(obs[[s]])[1]
   }
   if (is.na(weights)){
     weights <- pmin(nsamples, nsamples^2*epsilon^2)
@@ -152,7 +137,7 @@ fdp_breslow <- function(datasets, epsilon, beta_hat, p_hat, delta=rep(0.001, S),
   }
 
   for (s in 1:S){
-    trees_list[[s]] <- cdp_tree(datasets[[s]], beta_hat, epsilon[s], truncation=truncation,
+    trees_list[[s]] <- cdp_tree(obs[[s]], beta_hat, epsilon[s], truncation=truncation,
                                 levels=tree_height, delta=delta[s], cutoff=cutoff)
   }
   priv_breslow <- fdp_trees_to_breslow(trees_list, weights, cutoff=cutoff)
@@ -165,7 +150,7 @@ fdp_breslow <- function(datasets, epsilon, beta_hat, p_hat, delta=rep(0.001, S),
 #' A private SGD implementation to estimate Cox regression coefficients, that satisfies
 #' federated differential privacy.
 #'
-#' @param datasets List of S datasets, with (2+d) columns, as generated from sim_observations().
+#' @param obs List of S datasets, with (2+d) columns, as generated from sim_observations().
 #' @param epsilon Positive numeric vector of length S. Epsilon privacy budget in terms of DP.
 #' @param delta Optional positive numeric vector of length S. Delta privacy budget
 #' in terms of DP. Defaults to S entries of 0.001.
@@ -225,7 +210,28 @@ fdp_cox <- function(obs, epsilon, delta=rep(0.001, S), niters=NA, C_beta=1, C_z=
   return(beta)
 }
 
-
+#' FDP Cox interactive
+#'
+#' A private SGD implementation to estimate Cox regression coefficients, that reuses
+#' data across the iterations.
+#'
+#' @param obs List of S datasets, with (2+d) columns, as generated from sim_observations().
+#' @param epsilon Positive numeric vector of length S. Epsilon privacy budget in terms of DP.
+#' @param delta Optional positive numeric vector of length S. Delta privacy budget
+#' in terms of DP. Defaults to S entries of 0.001.
+#' @param weights. Optional positive numeric vector of length S. Weights used to aggregate
+#' the gradient estimates. Defaults to effective sample sizes, normalised to sum to 1.
+#' @param niters Optional positive integer. Number of gradient descent iterations.
+#' Defaults to 6*log(C_z^2 *sum(samples)/p^2).
+#' @param C_beta Optional positive numeric. l_2 upper bound for coefficients. Defaults to 1.
+#' @param C_z Optional positive numeric. l_2 upper bound for covariates. Defaults to 1.
+#' @param sensitivity Optional positive numeric vector of length S. l_2-sensitivity of
+#' the gradient of the partial log-likelihood. Defaults to an upper bound for ensuring
+#' privacy based on the other parameter values.
+#' @param stepsize Optional positive numeric. Step size in the descent direction. Defaults to 0.5.
+#' @param cutoff 
+#' @return A d-dimensional numeric vector estimating the Cox regression coefficients.
+#' @export
 fdp_cox_interactive <- function(obs, epsilon, delta=rep(0.001, S), niters=NA, 
                                 C_beta = 1, C_z = 1, sensitivity=NA, stepsize=0.5, 
                                 weights=NA, cutoff=1){
