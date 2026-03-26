@@ -10,7 +10,7 @@ preprocess <- function(obs, cutoff=1){
     # Return a list containing:
     # uncensored = indices of obs with \delta_i =1
     # u_preds = 1/n \sum_{\delta_i = 1} Z_i
-    p <- dim(obs)[2]
+    p <- dim(obs)[2] - 2
     sort_obs <- obs[order(obs[, 1]), ]
     if (is.na(cutoff)){
         uncensored <- which(sort_obs[, 2] == 1)
@@ -19,12 +19,15 @@ preprocess <- function(obs, cutoff=1){
         uncensored <- which(sort_obs[1:cutoff_ind, 2] == 1)
     }
     if (length(uncensored)==0){
-        uncensored_preds <- rep(0, p-2)
+        uncensored_preds <- rep(0, p)
     } else{
-        if (length(uncensored)==1){
-            uncensored_preds <- sort_obs[uncensored, 3:p]
+        if (length(uncensored) == 1){
+            uncensored_preds <- sort_obs[uncensored, 3:(p+2)]
+        }
+        else if (p==1){
+            uncensored_preds <- sum(sort_obs[uncensored, 3:(p+2)])
         } else{
-            uncensored_preds <- apply(sort_obs[uncensored, 3:p], MARGIN=2, sum)
+            uncensored_preds <- apply(sort_obs[uncensored, 3:(p+2)], MARGIN=2, sum)
         }
     }
     return(list(obs=sort_obs, uncensored=uncensored, upreds=uncensored_preds))
@@ -36,23 +39,64 @@ gradient <- function(beta, obs){
     # Return gradient of normalised log-likelihood from obs evaluated at beta
     obs_matrix <- obs$obs
     n <- nrow(obs_matrix); p <- ncol(obs_matrix)
-    weights <- exp(obs_matrix[, 3:p] %*% beta)
-    tsum_weights <- rev(cumsum(rev(weights)))
-    weighted_preds <- sweep(obs_matrix[, 3:p], MARGIN=1, weights, '*')
-    tsum_preds <- apply(weighted_preds, 2, function(x) rev(cumsum(rev(x))))
-    grad <- obs$upreds
-    for (t in obs$uncensored){
-        grad <- grad - tsum_preds[t, ] / tsum_weights[t]
+    if (p==3){
+        covariates <- obs_matrix[, 3]
+        weights <- exp(covariates*beta)
+        tsum_weights <- rev(cumsum(rev(weights)))
+        weighted_preds <- covariates*weights
+        tsum_preds <- rev(cumsum(rev(weighted_preds)))
+        grad <- obs$upreds
+        for (t in obs$uncensored){
+            grad <- grad - tsum_preds[t] / tsum_weights[t]
+        }
+        return(c(grad/n))
+    } else{
+        weights <- exp(obs_matrix[, 3:p] %*% beta)
+        tsum_weights <- rev(cumsum(rev(weights)))
+        weighted_preds <- sweep(obs_matrix[, 3:p], MARGIN=1, weights, '*')
+        tsum_preds <- apply(weighted_preds, 2, function(x) rev(cumsum(rev(x))))
+        grad <- obs$upreds
+        for (t in obs$uncensored){
+            grad <- grad - tsum_preds[t, ] / tsum_weights[t]
+        }
     }
     return(grad/n)
+}
+
+grad_sensitivity <- function(n, C_beta=1, C_z=1){
+    return(4*C_z/n + exp(2*C_z*C_beta)*(2*C_z + C_z^2)*log(n+1)/n)
+}
+
+label_grad_sensitivity <- function(covariates, beta){
+    if (is.matrix(covariates)){
+        n <- dim(covariates)[1]
+        max_norm <- max(sqrt(rowSums(covariates^2)))
+        max_norm_exp <- max(apply(covariates, 1, function(x) sqrt(sum(x^2))*exp(sum(x*beta))))
+        exp_negative <- max(apply(covariates, 1, function(x) -sum(x*beta)))
+        exp_positive <- max(apply(covariates, 1, function(x) sum(x*beta)))
+    } else if (is.null(dim(covariates))){
+        # special case p=1 inputs a vector
+        n <- length(covariates)
+        max_norm <- max(abs(covariates))
+        max_norm_exp <- max(vapply(covariates, function(x) sqrt(sum(x^2))*exp(sum(x*beta))),
+                            numeric(1))
+        exp_negative <- max(vapply(covariates, function(x) -sum(x*beta)), numeric(1))
+        exp_positive <- max(vapply(covariates, function(x) sum(x*beta)), numeric(1))
+    } 
+    return(3*max_norm/n + log(n+1)*max_norm*exp(exp_negative)*exp(exp_positive)/n + 
+               log(n+1)*max_norm_exp*exp(exp_negative)/n)
 }
 
 
 cdp_tree <- function(data, beta_hat, epsilon, levels, truncation, delta=0.001, 
                      cutoff=1){
-    sorted_obs <- preprocess(data, cutoff=3000)
+    sorted_obs <- preprocess(data, cutoff=cutoff)
     n <- dim(data)[1]; p <- dim(data)[2]
-    weights <- exp(sorted_obs$obs[, 3:p] %*% beta_hat)
+    if (p==3){
+        weights <- exp(sorted_obs$obs[, p]*beta_hat)
+    } else{
+        weights <- exp(sorted_obs$obs[, 3:p] %*% beta_hat)
+    }
     tsum_weights <- rev(cumsum(rev(weights)))
     tsum_weights <- pmin(1/tsum_weights, 1/(truncation*n))
     
