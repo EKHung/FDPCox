@@ -4,7 +4,7 @@ This repository contains the `R` package `FDPCox`, which implements the methods 
 
 - `CDP_sims.R`: central DP simulations (varying sample size, privacy budget and dimension) [Figure 1], and label central DP simulations [Figure 9]
 - `FDP_sims.R`: federated DP simulation for sequentially-interactive and fully-interactive mechanisms [Figures 2 and 3]
-- `real_data.R`: demonstration of our methods on the `survival::Rotterdam` dataset [Figure 4]
+- `real_data.R`: demonstration of our methods on the `survival::rotterdam` dataset [Figure 4]
 - `sensitivity_sims.R`: central DP simulations showing sensitivity to the covariate bound and descent step-size [Figure 5]
 - `censoring_sims.R`: simulations varying the rate of the censoring distribution [Figure 6]
 - `CDP_numsims.R`: log-log plots for numerical demonstration of phase transitions [Figures 7 and 8]
