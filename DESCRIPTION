@@ -3,7 +3,7 @@ Title: Cox model analysis under federated differential privacy
 Version: 0.0.0.9000
 Authors@R: 
     person("Elly", "Hung", , "elly.hung@warwick.ac.uk", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
+Description: This package implements the methods for Cox regression and cumulative hazard estimation under federated differential privacy constraints from arXiv:2508.19640.
 License: use_mit_license()
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
