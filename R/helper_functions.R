@@ -64,7 +64,7 @@ gradient <- function(beta, obs){
 }
 
 grad_sensitivity <- function(n, C_beta=1, C_z=1){
-    return(4*C_z/n + exp(2*C_z*C_beta)*(2*C_z + C_z^2)*log(n+1)/n)
+    return(4*C_z/n + exp(2*C_z*C_beta)*(2*C_z + C_z^2)*(1+log(n))/n)
 }
 
 label_grad_sensitivity <- function(covariates, beta){
@@ -83,8 +83,8 @@ label_grad_sensitivity <- function(covariates, beta){
         exp_negative <- max(vapply(covariates, function(x) -sum(x*beta)), numeric(1))
         exp_positive <- max(vapply(covariates, function(x) sum(x*beta)), numeric(1))
     } 
-    return(3*max_norm/n + log(n+1)*max_norm*exp(exp_negative)*exp(exp_positive)/n + 
-               log(n+1)*max_norm_exp*exp(exp_negative)/n)
+    return(3*max_norm/n + (1+log(n))*max_norm*exp(exp_negative)*exp(exp_positive)/n + 
+               (1+log(n))*max_norm_exp*exp(exp_negative)/n)
 }
 
 
