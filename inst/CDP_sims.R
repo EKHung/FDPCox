@@ -48,7 +48,7 @@ for (e in 1:length(param_dim)){
 }
 cdp_dimension <- aperm(cdp_dimension, perm = c(2, 1, 3))
 
-save(labelcdp_beta, labelcdp_breslow, cdp_beta, cdp_breslow, cdp_dimensions, 
+save(labelcdp_beta, labelcdp_breslow, cdp_beta, cdp_breslow, cdp_dimension, 
      file='CDP_sims.Rdata')
 
 
