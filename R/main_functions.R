@@ -88,14 +88,21 @@ cdp_cox <- function(obs, epsilon, delta=0.001, niters=NA, C_beta = 1, C_z = 1,
 #' of being at-risk. Defaults to 1.
 #' @return A numeric that is an FDP estimate of P(Y(1)=cutoff).
 #' @export
-fdp_probabilities <- function(times, epsilon, delta=rep(0.001, S), cutoff=1){
-  S <- length(times)
-  p0 <- 0
-  for (s in 1:S){
-    noise <- 2*log(1.25/delta[s])/(length(times[[s]])^2 * epsilon[s]^2)
-    p0 <- p0 + mean(times[[s]]>cutoff) + rnorm(1, sd=sqrt(noise))
-  }
-  return(p0/S)
+fdp_probabilities <- function(times, epsilon, delta=NULL, cutoff=1){
+    S <- length(times)
+    if (is.null(delta)) delta <- rep(0.001, S)
+    
+    p0 <- 0
+    ess <- 0
+    for (s in 1:S){
+        n_s <- length(times[[s]])
+        noise <- 2*log(1.25/delta[s])/(n_s^2 * epsilon[s]^2)
+        essloc <- min(n_s, n_s^2*epsilon[s]^2)
+        p0 <- p0 + (mean(times[[s]] > cutoff) +
+                        rnorm(1, sd=sqrt(noise))) * essloc
+        ess <- ess + essloc
+    }
+    return(p0/ess)
 }
 
 
