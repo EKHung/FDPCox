@@ -89,9 +89,10 @@ label_grad_sensitivity <- function(covariates, beta){
 
 
 cdp_tree <- function(data, beta_hat, epsilon, levels, truncation, delta=0.001, 
-                     cutoff=1){
+                     cutoff=1, Cz=1){
     sorted_obs <- preprocess(data, cutoff=cutoff)
     n <- dim(data)[1]; p <- dim(data)[2]
+    bnorm <- sqrt(sum(beta_hat^2))
     if (p==3){
         weights <- exp(sorted_obs$obs[, p]*beta_hat)
     } else{
@@ -123,8 +124,9 @@ cdp_tree <- function(data, beta_hat, epsilon, levels, truncation, delta=0.001,
             tree[l, j] <- tree[l+1, 2*j-1] + tree[l+1, 2*j]
         }
     }
-    noise_scale <- ((2*log(1/delta)/epsilon + 1)/(epsilon*n^2/levels)
-                    *(1/truncation^4 + 3/truncation^2))
+    noise_scale <- (2*log(1/delta)/epsilon + 1)/(epsilon*n^2/levels)
+                    *(exp(2*Cz*bnorm)/truncation^4 + 2*exp(Cz*bnorm)/truncation^3 +
+                      2/truncation^2)
     for(l in 1:levels){
         for(m in 1:2^l){
             tree[l, m] <- max(0, tree[l, m] + rnorm(1, sd=sqrt(noise_scale)))
