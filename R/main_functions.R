@@ -88,7 +88,7 @@ cdp_cox <- function(obs, epsilon, delta=0.001, niters=NA, C_beta = 1, C_z = 1,
 #' of being at-risk. Defaults to 1.
 #' @return A numeric that is an FDP estimate of P(Y(1)=cutoff).
 #' @export
-fdp_probabilities <- function(times, epsilon, delta=NULL, cutoff=1){
+fdp_probabilities <- function(times, epsilon, delta=NULL, cutoff=1, Cp=0.1){
     S <- length(times)
     if (is.null(delta)) delta <- rep(0.001, S)
     
@@ -96,13 +96,13 @@ fdp_probabilities <- function(times, epsilon, delta=NULL, cutoff=1){
     ess <- 0
     for (s in 1:S){
         n_s <- length(times[[s]])
-        noise <- 2*log(1.25/delta[s])/(n_s^2 * epsilon[s]^2)
+        noise <- 2*(log(1/delta[s])+epsilon[s])/(n_s^2 * epsilon[s]^2)
         essloc <- min(n_s, n_s^2*epsilon[s]^2)
         p0 <- p0 + (mean(times[[s]] > cutoff) +
                         rnorm(1, sd=sqrt(noise))) * essloc
         ess <- ess + essloc
     }
-    return(p0/ess)
+    return(max((p0/ess), Cp/2))
 }
 
 
@@ -136,7 +136,7 @@ fdp_breslow <- function(obs, epsilon, beta_hat, p_hat, delta=rep(0.001, S),
     weights <- weights/sum(weights)
   }
   if (is.na(tree_height)){
-    tree_height <-  floor(log(sum(pmin(nsamples, nsamples^2*epsilon^2)), 2)/2)
+    tree_height <-  ceil(log(sum(pmin(nsamples, nsamples^2*epsilon^2)), 2)/2) + 1
   }
   trees_list <- list()
   if(is.na(truncation)){
@@ -200,7 +200,7 @@ fdp_cox <- function(obs, epsilon, delta=rep(0.001, S), niters=NA, C_beta=1, C_z=
             sensitivity <- grad_sensitivity(nsamples[s], C_beta=beta_l2, C_z=C_z)
           }
      }
-    noise_scale <- sqrt(2*log(1.25/delta))*sensitivity/epsilon
+    noise_scale <- sqrt(2*(log(1.25/delta)+epsilon))*sensitivity/epsilon
     step <- 0
     for (s in 1:S){
       subset_obs <- obs[[s]][(1+(k-1)*nsamples[s]):(k*nsamples[s]), ]
