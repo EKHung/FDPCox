@@ -9,7 +9,7 @@ preprocess <- function(obs, cutoff=1){
     # obs is a n * (2 + p) matrix with columns (T, \Delta, Z)
     # Return a list containing:
     # uncensored = indices of obs with \delta_i =1
-    # u_preds = 1/n \sum_{\delta_i = 1} Z_i
+    # u_preds = \sum_{\delta_i = 1} Z_i
     p <- dim(obs)[2] - 2
     sort_obs <- obs[order(obs[, 1]), ]
     if (is.na(cutoff)){
@@ -124,9 +124,8 @@ cdp_tree <- function(data, beta_hat, epsilon, levels, truncation, delta=0.001,
             tree[l, j] <- tree[l+1, 2*j-1] + tree[l+1, 2*j]
         }
     }
-    noise_scale <- (2*log(1/delta)/epsilon + 1)/(epsilon*n^2/levels)
-                    *(exp(2*Cz*bnorm)/truncation^4 + 2*exp(Cz*bnorm)/truncation^3 +
-                      2/truncation^2)
+    noise_scale <- (2*log(1/delta)/epsilon + 1)/(epsilon*n^2/levels)*
+     (exp(2*Cz*bnorm)/truncation^4 + 2*exp(Cz*bnorm)/truncation^3 + 2/truncation^2)
     for(l in 1:levels){
         for(m in 1:2^l){
             tree[l, m] <- max(0, tree[l, m] + rnorm(1, sd=sqrt(noise_scale)))
@@ -136,7 +135,104 @@ cdp_tree <- function(data, beta_hat, epsilon, levels, truncation, delta=0.001,
 }
 
 
-fdp_trees_to_breslow <- function(trees_list, weights, cutoff=1){
+cdp_na_tree <- function(data, epsilon, delta=0.001, levels=NA,
+                        C_p=0.01, cutoff=1) {
+    data <- as.matrix(data)
+    n <- nrow(data)
+    
+    if (is.na(levels))
+        levels <- ceiling(log2(min(n, n^2*epsilon^2))/2) + 1
+    
+    n0 <- floor(n/10)
+    p_hat <- mean(data[seq_len(n0),1] >= cutoff) +
+        rnorm(1, sd=sqrt(2*log(1/delta)+epsilon)/(n0*epsilon))
+    c_s <- max(C_p/2, 0.9*p_hat)
+    
+    obs <- data[seq.int(n0+1L,n),,drop=FALSE]
+    obs <- obs[order(obs[,1]),,drop=FALSE]
+    n_prime <- nrow(obs)
+    
+    risk_count <- n_prime - match(obs[,1], obs[,1]) + 1L
+    event <- which(obs[,2] == 1 & obs[,1] <= cutoff)
+    increments <- 1/pmax(c_s*n_prime, risk_count[event])
+    
+    tree <- matrix(0, nrow=levels, ncol=2^levels)
+    
+    if (length(event) > 0) {
+        bin <- pmin(2^levels,
+                    pmax(1L, ceiling(obs[event,1]/cutoff * 2^levels)))
+        for (m in seq_len(2^levels))
+            tree[levels,m] <- sum(increments[bin == m])
+    }
+    
+    if (levels > 1) {
+        for (l in seq.int(levels-1L,1L))
+            for (m in seq_len(2^l))
+                tree[l,m] <- tree[l+1L,2*m-1L] + tree[l+1L,2*m]
+    }
+    
+    noise_var <- (1/c_s^4 + 2/c_s^3 + 2/c_s^2) *
+        (2*log(1/delta)/epsilon + 1) /
+        (n_prime^2*epsilon/levels)
+    
+    for (l in seq_len(levels)) {
+        ind <- seq_len(2^l)
+        tree[l,ind] <- tree[l,ind] +
+            rnorm(length(ind), sd=sqrt(noise_var))
+    }
+    
+    tree
+}
+
+consistent_tree <- function(tree) {
+    L <- nrow(tree)
+    
+    # Bottom-up pass
+    z <- tree
+    a <- rep(1, L)
+    
+    if (L > 1) {
+        for (l in seq.int(L - 1L, 1L)) {
+            a[l] <- 1 + a[l + 1L]/2
+            
+            for (m in seq_len(2^l)) {
+                z[l, m] <- (tree[l, m] +
+                                (a[l + 1L]/2) *
+                                (z[l + 1L, 2*m - 1L] +
+                                     z[l + 1L, 2*m])) / a[l]
+            }
+        }
+    }
+    
+    # Top-down pass
+    x <- z
+    
+    if (L > 1) {
+        for (l in seq_len(L - 1L)) {
+            for (m in seq_len(2^l)) {
+                d <- x[l, m] -
+                    z[l + 1L, 2*m - 1L] -
+                    z[l + 1L, 2*m]
+                
+                x[l + 1L, 2*m - 1L] <-
+                    z[l + 1L, 2*m - 1L] + d/2
+                
+                x[l + 1L, 2*m] <-
+                    z[l + 1L, 2*m] + d/2
+            }
+        }
+    }
+    
+    # Remove unused matrix entries
+    for (l in seq_len(L))
+        if (2^l < ncol(x))
+            x[l, (2^l + 1L):ncol(x)] <- 0
+    
+    x
+}
+
+
+fdp_trees_to_breslow <- function(trees_list, weights, cutoff=1, C_lambda=3){
     S <- length(trees_list)
     height <- dim(trees_list[[1]])[1]; bins <- dim(trees_list[[1]])[2]
     timepoints <- cutoff*(1:bins)/bins
@@ -155,7 +251,12 @@ fdp_trees_to_breslow <- function(trees_list, weights, cutoff=1){
     for (s in 1:S){
         steps[bins] <- steps[bins] + weights[s]*sum(trees_list[[s]][1, ])
     }
+    steps <- pmin(pmax(steps, 0), C_lambda*timepoints)
     return(list('times'=timepoints, 'vals'=steps))
 }
+
+
+
+
 
 
