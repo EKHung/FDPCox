@@ -12,7 +12,7 @@
 #' @return A n*(2+length(beta)) matrix, where the first column is the observed time,
 #' the second column is the 1/0 (failure observed/censored) and remaining columns are covariates.
 #' @export
-sim_observations <- function(n, beta, censor=1, C_z=1){
+sim_observations <- function(n, beta, censor=1, C_z=1, cutoff=1){
   d <- length(beta)
   predictors <- matrix(runif(n*d, min=-C_z/sqrt(d), max=C_z/sqrt(d)),
                        nrow=n, ncol=d)
@@ -21,7 +21,7 @@ sim_observations <- function(n, beta, censor=1, C_z=1){
   obs[, 1] <- rexp(n, censor)
   obs[, 2] <- apply(predictors, 1,
                     function(x) return(rexp(1, exp(sum(beta*x)))))
-  obs[, 3] <- apply(obs[, c(1, 2)], 1, min)
+  obs[, 3] <- apply(obs[, c(1, 2)], cutoff, min)
   obs[, 4] <- obs[, 1] > obs[, 2] # indicators for not censored
   return(cbind(obs[, c(3, 4)], predictors))
 }
@@ -37,7 +37,7 @@ sim_observations <- function(n, beta, censor=1, C_z=1){
 #' @param delta Optional positive numeric. Delta privacy budget in terms of DP.
 #' Defaults to 0.001.
 #' @param niters Optional positive integer. Number of gradient descent iterations.
-#' Defaults to 6*log(C_z^2 *n/p^2).
+#' Defaults to 20*log(C_z^2 *n/p^2).
 #' @param C_beta Optional positive numeric. l_2 upper bound for coefficients. Defaults to 1.
 #' @param C_z Optional positive numeric. l_2 upper bound for covariates. Defaults to 1.
 #' @param sensitivity Optional positive numeric. l_2-sensitivity of the gradient of the partial
@@ -121,11 +121,13 @@ fdp_probabilities <- function(times, epsilon, delta=NULL, cutoff=1, Cp=0.1){
 #' the per-server cumulative hazard functions. Defaults to effective sample sizes, normalised
 #' to sum to 1.
 #' @param tree_height Optional positive numeric. Number of tree levels to
+#' @param nelsonaalen Defaults to true for implementing NA. Set to FALSE for Breslow.
 #' @return list containing two positive numeric vectors, 'times' and 'vals'.
 #' vals[t] is the estimate for the cumulative hazard at times[t].
 #' @export
-fdp_breslow <- function(obs, epsilon, beta_hat, p_hat, delta=rep(0.001, S), 
-                        cutoff=1, C_z=1, weights=NA, tree_height=NA, truncation=NA){
+fdp_breslow <- function(obs, epsilon, beta_hat=0, p_hat=0, delta=rep(0.001, S), 
+                        cutoff=1, C_z=1, weights=NA, tree_height=NA, truncation=NA,
+                        C_lambda=2, nelsonaalen=TRUE, Cp=0.01){
   S <- length(obs)
   nsamples <- rep(0, S)
   for (s in 1:S){
@@ -136,18 +138,24 @@ fdp_breslow <- function(obs, epsilon, beta_hat, p_hat, delta=rep(0.001, S),
     weights <- weights/sum(weights)
   }
   if (is.na(tree_height)){
-    tree_height <-  ceil(log(sum(pmin(nsamples, nsamples^2*epsilon^2)), 2)/2) + 1
+    tree_height <-  max(ceiling(log(sum(pmin(nsamples, nsamples^2*epsilon^2)), 2)/2), 1)
   }
   trees_list <- list()
   if(is.na(truncation)){
-    truncation <- exp(-C_z*sqrt(sum(beta_hat)^2))*p_hat*0.9
+    truncation <- max(p_hat*0.9, Cp/2)
   }
 
   for (s in 1:S){
+    if (nelsonaalen){
+        trees_list[[s]] <- cdp_na_tree(obs[[s]], epsilon[s], levels=tree_height, 
+                                       delta=delta[s], cutoff=cutoff)
+    } else{
     trees_list[[s]] <- cdp_tree(obs[[s]], beta_hat, epsilon[s], truncation=truncation,
                                 levels=tree_height, delta=delta[s], cutoff=cutoff)
+    }
   }
-  priv_breslow <- fdp_trees_to_breslow(trees_list, weights, cutoff=cutoff)
+  trees_list <- lapply(trees_list, consistent_tree)
+  priv_breslow <- fdp_trees_to_breslow(trees_list, weights, cutoff=cutoff, C_lambda=C_lambda)
   return(priv_breslow)
 }
 
@@ -164,7 +172,7 @@ fdp_breslow <- function(obs, epsilon, beta_hat, p_hat, delta=rep(0.001, S),
 #' @param weights. Optional positive numeric vector of length S. Weights used to aggregate
 #' the gradient estimates. Defaults to effective sample sizes, normalised to sum to 1.
 #' @param niters Optional positive integer. Number of gradient descent iterations.
-#' Defaults to 6*log(C_z^2 *sum(samples)/p^2).
+#' Defaults to 20*log(C_z^2 *sum(samples)/p^2).
 #' @param C_beta Optional positive numeric. l_2 upper bound for coefficients. Defaults to 1.
 #' @param C_z Optional positive numeric. l_2 upper bound for covariates. Defaults to 1.
 #' @param sensitivity Optional positive numeric vector of length S. l_2-sensitivity of
@@ -174,12 +182,12 @@ fdp_breslow <- function(obs, epsilon, beta_hat, p_hat, delta=rep(0.001, S),
 #' @return A d-dimensional numeric vector estimating the Cox regression coefficients.
 #' @export
 fdp_cox <- function(obs, epsilon, delta=rep(0.001, S), niters=NA, C_beta=1, C_z=1,
-                    sensitivity=NA, stepsize=0.5, weights=NA){
-  
+                    sensitivity=NA, stepsize=0.5, weights=NA, cutoff=1){
   S <- length(obs); p <- dim(obs[[1]])[2] - 2;
   nsamples <- rep(0, S)
+  sorted_obs <- list()
   for (s in 1:S){
-    nsamples[s] <- dim(obs[[s]])[1]
+      nsamples[s] <- dim(obs[[s]])[1]
   }
   
   if (is.na(niters)){
@@ -204,7 +212,7 @@ fdp_cox <- function(obs, epsilon, delta=rep(0.001, S), niters=NA, C_beta=1, C_z=
     step <- 0
     for (s in 1:S){
       subset_obs <- obs[[s]][(1+(k-1)*nsamples[s]):(k*nsamples[s]), ]
-      sorted_obs <- preprocess(subset_obs)
+      sorted_obs <- preprocess(subset_obs, cutoff=cutoff)
       step <- step + weights[s]*((gradient(beta, sorted_obs))
                                  + noise_scale[s]*rnorm(p))
     }
@@ -229,7 +237,7 @@ fdp_cox <- function(obs, epsilon, delta=rep(0.001, S), niters=NA, C_beta=1, C_z=
 #' @param weights. Optional positive numeric vector of length S. Weights used to aggregate
 #' the gradient estimates. Defaults to effective sample sizes, normalised to sum to 1.
 #' @param niters Optional positive integer. Number of gradient descent iterations.
-#' Defaults to 6*log(C_z^2 *sum(samples)/p^2).
+#' Defaults to 20*log(C_z^2 *sum(samples)/p^2).
 #' @param C_beta Optional positive numeric. l_2 upper bound for coefficients. Defaults to 1.
 #' @param C_z Optional positive numeric. l_2 upper bound for covariates. Defaults to 1.
 #' @param sensitivity Optional positive numeric vector of length S. l_2-sensitivity of
