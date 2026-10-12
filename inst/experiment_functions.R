@@ -8,15 +8,14 @@ sup_norm_diff <- function(step_approx, times, true_baseline=function(x){x}){
 }
 
 
-step_functions_sup_diff <- function(t1, v1, t2, v2){
-    t1 <- c(0, t1); v1 <- c(0, v1); t2 <- c(0, t2); v2 <- c(0, v2)
-    minmaxtime <- min(t1[length(t1)], t2[length(t2)])
-    timepoints <- sort(unique(c(t1, t2)))
-    minmax_index <- findInterval(minmaxtime, timepoints)
-    timepoints <- timepoints[1:minmax_index]
+step_functions_sup_diff <- function(t1, v1, t2, v2, cutoff=1){
+    t1 <- c(0, t1); v1 <- c(0, v1)
+    t2 <- c(0, t2); v2 <- c(0, v2)
+    timepoints <- sort(unique(c(0, cutoff, t1, t2)))
+    timepoints <- timepoints[timepoints >= 0 & timepoints <= cutoff]
     curve1 <- v1[findInterval(timepoints, t1)]
     curve2 <- v2[findInterval(timepoints, t2)]
-    return(max(abs(curve1 - curve2)))
+    max(abs(curve1 - curve2))
 }
 
 
@@ -35,7 +34,8 @@ cdp_beta_experiment <- function(nsamples, beta, epsilon, censor=0.3, C_z=1,
 
 cdp_full_experiment <- function(nsamples, beta, epsilon, censor=0.3, C_z=1,
                                 delta=0.001, reps=200, max_time=1, 
-                                split=c(1, 0.1, 1), sensitivity=NA){
+                                split=c(1, 0.1, 1), sensitivity=NA, C_lambda=2,
+                                nelsonaalen=TRUE){
     beta_error <- rep(0, reps)
     lambda_error <- rep(0, reps)
     for (r in 1:reps){
@@ -43,17 +43,26 @@ cdp_full_experiment <- function(nsamples, beta, epsilon, censor=0.3, C_z=1,
                                      censor=censor, C_z=C_z)
         private_beta <- cdp_cox(obs_beta, epsilon, delta=delta, C_z=C_z,
                                 sensitivity=sensitivity)
-        
-        obs_p <- sim_observations(as.integer(nsamples*split[2]), beta, 
-                                  censor=censor, C_z=C_z)
-        
-        p_hat <- fdp_probabilities(list(obs_p[, 1]), c(epsilon), delta=c(delta))
-
-        obs_tree <- sim_observations(as.integer(nsamples*split[3]), 
-                                     beta, censor=censor, C_z=C_z)
-        
-        breslow <- fdp_breslow(list(obs_tree), c(epsilon), private_beta, p_hat, 
-                               C_z=C_z, delta=c(delta), cutoff=max_time)
+        if (nelsonaalen){
+            obs_na <-  sim_observations(as.integer(nsamples*split[1]), c(0, 0), 
+                                        censor=censor, C_z=C_z)
+            obs_na <- obs_na[, 1:2]
+            breslow <- fdp_breslow(list(obs_na), c(epsilon), 0, 0, C_z=C_z, 
+                                   delta=c(delta), cutoff=max_time, C_lambda=C_lambda,
+                                   nelsonaalen=TRUE)
+        } else{
+            obs_p <- sim_observations(as.integer(nsamples*split[2]), beta, 
+                                      censor=censor, C_z=C_z)
+            
+            p_hat <- fdp_probabilities(list(obs_p[, 1]), c(epsilon), delta=c(delta))
+    
+            obs_tree <- sim_observations(as.integer(nsamples*split[3]), 
+                                         beta, censor=censor, C_z=C_z)
+            
+            breslow <- fdp_breslow(list(obs_tree), c(epsilon), private_beta, p_hat, 
+                                   C_z=C_z, delta=c(delta), cutoff=max_time, C_lambda=C_lambda,
+                                   nelsonaalen=FALSE)
+        }
         beta_error[r] <- sum((private_beta - beta)^2)
         lambda_error[r] <- sup_norm_diff(breslow$vals, breslow$times,
                                          true_baseline=function(x){x}) 
@@ -64,7 +73,7 @@ cdp_full_experiment <- function(nsamples, beta, epsilon, censor=0.3, C_z=1,
 
 fdp_experiment <- function(S, nsamples, beta, epsilon, censor=0.3, C_z=1, C_beta=1,
                            stepsize=0.5, delta=rep(0.001, S), reps=200, max_time=1, 
-                           split=c(1, 0.1, 1), interactive=FALSE,
+                           split=c(1, 0.1, 1), interactive=FALSE, nelsonaalen=TRUE,
                            trunc_mul=0.9*exp(-C_z*sqrt(sum(beta^2)))){
     # setting interactive=TRUE uses the whole set of data at each gradient descent
     # iteration to make use of RDP composition. 
@@ -88,25 +97,39 @@ fdp_experiment <- function(S, nsamples, beta, epsilon, censor=0.3, C_z=1, C_beta
         }
         beta_errors[r] <- sum((beta - priv_beta)^2)
         
-        prob_obs <- list()
-        # at-risk prob part 
-        for (s in 1:S){
-            prob_obs[[s]] <- sim_observations(nsamples[s]*split[2], beta, 
-                                              censor=censor, C_z=C_z)[, 1]
+        if (nelsonaalen){
+            obs <- list()
+            # beta estimation part 
+            for (s in 1:S){
+                obs[[s]] <- sim_observations(nsamples[s]*split[1], c(0, 0), 
+                                             censor=censor, C_z=C_z)[, 1:2]
+            }
+            priv_na <- fdp_breslow(obs, epsilon, delta=delta)
+            sup_errors[r] <- sup_norm_diff(priv_na$vals, priv_na$times,
+                                           true_baseline=function(x){x})
+            
+        } else {
+        
+            prob_obs <- list()
+            # at-risk prob part 
+            for (s in 1:S){
+                prob_obs[[s]] <- sim_observations(nsamples[s]*split[2], beta, 
+                                                  censor=censor, C_z=C_z)[, 1]
+            }
+            p_hat <- fdp_probabilities(prob_obs, epsilon, delta=delta, cutoff=max_time)
+    
+            # cumulative_hazard estimation part
+            lambda_obs <- list()
+            for (s in 1:S){
+                lambda_obs[[s]] <- sim_observations(nsamples[s]*split[3], beta, 
+                                                    censor=censor, C_z=C_z)
+            }
+            priv_breslow <- fdp_breslow(obs, epsilon, priv_beta, p_hat, delta=delta, 
+                                        cutoff=max_time, C_z=C_z, 
+                                        truncation=trunc_mul*p_hat, nelsonaalen=FALSE)
+            sup_errors[r] <- sup_norm_diff(priv_breslow$vals, priv_breslow$times,
+                                           true_baseline=function(x){x})
         }
-        p_hat <- fdp_probabilities(prob_obs, epsilon, delta=delta, cutoff=max_time)
-
-        # cumulative_hazard estimation part
-        lambda_obs <- list()
-        for (s in 1:S){
-            lambda_obs[[s]] <- sim_observations(nsamples[s]*split[3], beta, 
-                                                censor=censor, C_z=C_z)
-        }
-        priv_breslow <- fdp_breslow(obs, epsilon, priv_beta, p_hat, delta=delta, 
-                                    cutoff=max_time, C_z=C_z, 
-                                    truncation=trunc_mul*p_hat)
-        sup_errors[r] <- sup_norm_diff(priv_breslow$vals, priv_breslow$times,
-                                       true_baseline=function(x){x})
     }
     return(list('beta_error'=beta_errors, 'lambda_error'=sup_errors))
 }
